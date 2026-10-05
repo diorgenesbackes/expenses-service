@@ -1,5 +1,6 @@
 using Expenses.Api.Configuration;
 using Expenses.Api.Errors;
+using Expenses.Api.HealthChecks;
 using Expenses.Application.Service;
 using Expenses.Domain.Repository;
 using Expenses.Infrastructure.Persistence;
@@ -13,6 +14,9 @@ builder.Services.AddControllers().ConfigureApplicationPartManager(manager =>
     manager.FeatureProviders.Add(new UsersControllerFeatureProvider(builder.Environment.IsDevelopment())));
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<ApiExceptionHandler>();
+builder.Services.AddHealthChecks()
+    .AddCheck<DatabaseHealthCheck>(DatabaseHealthCheck.Name,
+        timeout: TimeSpan.FromSeconds(DatabaseHealthCheck.TimeoutSeconds));
 builder.Services.AddSwaggerGen(options =>
 {
     options.SwaggerDoc("v1", new OpenApiInfo

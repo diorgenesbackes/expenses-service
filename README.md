@@ -4,7 +4,8 @@ API em ASP.NET Core (.NET 10). A solution `Expenses.sln` contém os projetos
 `Expenses.Api`, `Expenses.Application`, `Expenses.Domain`, `Expenses.Infrastructure`
 e `Expenses.Test`.
 
-O `GET /health` informa se a API responde. O `GET /v1/identity/users` consulta
+O `GET /health` informa se a API responde. O `GET /health/db` verifica se a aplicação
+consegue acessar o PostgreSQL. O `GET /v1/identity/users` consulta
 `identity.users` no PostgreSQL e valida o fluxo API → service → repository → banco.
 Esta listagem é um diagnóstico local: fica disponível apenas em `Development`.
 Em `Production`, `Staging` e demais ambientes, a rota não é registrada e retorna
@@ -20,7 +21,7 @@ Em `Production`, `Staging` e demais ambientes, a rota não é registrada e retor
 
 A API lê `ConnectionStrings:Expenses`. Neste ambiente, a conexão com
 `127.0.0.1:5432/expenses`, usuário `admin`, já está configurada em **User Secrets**,
-usando as credenciais do `.env` da raiz. A senha não fica no código nem no README.
+usando as credenciais de `expenses-infrastructure/.env`. A senha não fica no código nem no README.
 O perfil `Development` carrega esses segredos automaticamente. Após alterar a
 senha do banco, atualize os User Secrets também.
 
@@ -41,6 +42,20 @@ O backend não executa `EnsureCreated`, migrations do EF Core ou seed de usuári
 durante a inicialização.
 
 ## Iniciar a aplicação
+
+Para executar em container, a partir da raiz entre no diretório de infraestrutura:
+
+```bash
+cd expenses-infrastructure
+docker --context desktop-linux compose up -d --build --wait backend
+```
+
+Esse comando inicia também o PostgreSQL. A API fica em `http://localhost:5183`,
+com conexão fornecida pelo Compose a partir de `expenses-infrastructure/.env`. O build publica em
+Release, mas o ambiente local é `Development` por padrão. Veja as instruções de
+frontend, logs e encerramento no [guia de infraestrutura](../expenses-infrastructure/README.md).
+
+Para executar diretamente pelo SDK, siga os passos abaixo.
 
 Na raiz do repositório, entre no diretório do serviço:
 
@@ -66,7 +81,7 @@ Com a API em execução no ambiente `Development`:
 - Documento OpenAPI JSON: <http://localhost:5183/swagger/v1/swagger.json>
 - No perfil HTTPS, a interface fica em <https://localhost:7285/swagger>.
 
-A documentação inclui `GET /health` e `GET /v1/identity/users`, os parâmetros
+A documentação inclui `GET /health`, `GET /health/db` e `GET /v1/identity/users`, os parâmetros
 `page`/`pageSize`, seus limites e valores padrão, os modelos de resposta e os
 códigos HTTP. Use **Try it out** e **Execute** para chamar os endpoints. O JSON
 também pode ser importado no Postman.
@@ -89,6 +104,29 @@ A resposta esperada é HTTP `200 OK` com o corpo:
 ```json
 {"status":"up"}
 ```
+
+Para verificar o acesso ao banco pela aplicação:
+
+```bash
+curl -i http://localhost:5183/health/db
+```
+
+| Resultado | HTTP | Corpo |
+| --- | --- | --- |
+| Banco acessível | `200 OK` | `{"status":"up"}` |
+| Falha de conexão, configuração inválida ou timeout | `503 Service Unavailable` | `{"status":"down"}` |
+
+O endpoint está disponível em todos os ambientes e usa o `ExpensesDbContext` com
+a mesma `ConnectionStrings:Expenses` da aplicação. A verificação chama
+`Database.CanConnectAsync`, sem consultar tabelas de negócio, alterar dados ou
+validar migrations. Um banco acessível pode estar com o schema desatualizado.
+O [Health Checks do ASP.NET Core](https://learn.microsoft.com/aspnet/core/host-and-deploy/health-checks?view=aspnetcore-10.0)
+executa a verificação em um escopo próprio, com timeout de cinco segundos e
+cancelamento da requisição. Nesse escopo, o timeout de abertura da conexão também
+é limitado a cinco segundos, preservando valores menores já configurados.
+Não há retry automático nem cache do resultado.
+A resposta contém apenas o estado, sem detalhes de conexão ou credenciais.
+O `/health` permanece independente da disponibilidade do banco.
 
 ## Consultar usuários
 
@@ -140,7 +178,9 @@ dotnet test Expenses.sln --no-build
 
 Essa suíte verifica paginação, mapeamento, respostas HTTP, parâmetros inválidos,
 erros sanitizados, cancelamento/timeout, restrição por ambiente e independência do
-health check. Os testes HTTP usam `WebApplicationFactory`. O cenário com banco real
+health check. Também cobre o `/health/db` com falha de conexão, configuração inválida
+e servidor sem resposta, verificando o limite de cinco segundos. Os testes HTTP usam
+`WebApplicationFactory`. O cenário com banco real
 fica explicitamente marcado como ignorado quando a conexão de teste não foi fornecida.
 
 Para executar **todos** os testes, incluindo PostgreSQL real:
@@ -150,9 +190,9 @@ python3 scripts/test-postgres.py
 ```
 
 O script usa o container `expenses-postgres` no contexto `desktop-linux`, obtém as
-credenciais do `.env` da raiz ou de `POSTGRES_USER`/`POSTGRES_PASSWORD`, cria um banco
+credenciais de `expenses-infrastructure/.env` ou de `POSTGRES_USER`/`POSTGRES_PASSWORD`, cria um banco
 aleatório `expenses_users_check_*`, aplica o Liquibase e executa a suíte. O teste
-insere três usuários sintéticos nesse banco e verifica ordenação, páginas, colunas
+verifica o `/health/db` com sucesso, insere três usuários sintéticos nesse banco e verifica ordenação, páginas, colunas
 geradas, datas UTC e ausência de tracking. O banco temporário é removido ao final;
 nenhum usuário de teste é inserido em `expenses`. Se algum teste falhar, o comando
 retorna erro após tentar a limpeza.

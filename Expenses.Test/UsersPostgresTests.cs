@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using Expenses.Domain.Dto.Response;
 using Expenses.Domain.Repository;
@@ -33,6 +34,11 @@ public sealed class UsersPostgresTests
         await connection.OpenAsync();
         using var factory = new ApiFactory(connectionString: connectionString);
         using var client = factory.CreateHttpsClient();
+
+        using var health = await client.GetAsync("/health/db");
+        Assert.Equal(HttpStatusCode.OK, health.StatusCode);
+        Assert.Equal("{\"status\":\"up\"}", await health.Content.ReadAsStringAsync());
+        Assert.True(health.Headers.CacheControl?.NoStore);
 
         var empty = await client.GetFromJsonAsync<UsersPageResponse>("/v1/identity/users");
         Assert.NotNull(empty);

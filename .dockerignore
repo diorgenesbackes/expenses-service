@@ -1,0 +1,18 @@
+# Send only the projects used by the API, without local build output or secrets.
+*
+!Expenses.Api/
+!Expenses.Api/**
+!Expenses.Application/
+!Expenses.Application/**
+!Expenses.Domain/
+!Expenses.Domain/**
+!Expenses.Infrastructure/
+!Expenses.Infrastructure/**
+**/bin
+**/obj
+**/.env*
+**/secrets.json
+**/appsettings.*.local.json
+**/*.pfx
+**/*.pem
+**/*.user

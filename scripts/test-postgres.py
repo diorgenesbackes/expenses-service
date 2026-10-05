@@ -26,7 +26,7 @@ def connection_value(value):
 
 def main():
     local = {}
-    env_file = ROOT / ".env"
+    env_file = ROOT / "expenses-infrastructure" / ".env"
     if env_file.exists():
         for line in env_file.read_text().splitlines():
             if line.strip() and not line.lstrip().startswith("#"):
@@ -36,7 +36,7 @@ def main():
     username = os.environ.get("POSTGRES_USER", local.get("POSTGRES_USER", "admin"))
     password = os.environ.get("POSTGRES_PASSWORD", local.get("POSTGRES_PASSWORD"))
     if not password:
-        raise RuntimeError("Configure POSTGRES_PASSWORD in the environment or root .env.")
+        raise RuntimeError("Configure POSTGRES_PASSWORD in the environment or expenses-infrastructure/.env.")
     env = os.environ.copy()
     env.update(
         LIQUIBASE_COMMAND_URL=f"jdbc:postgresql://127.0.0.1:5432/{DATABASE}",
