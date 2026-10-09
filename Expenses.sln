@@ -1,4 +1,4 @@
-﻿
+
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
@@ -11,7 +11,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Expenses.Application", "Exp
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Expenses.Domain", "Expenses.Domain\Expenses.Domain.csproj", "{540A04A3-9B70-4068-96D9-16CEC1E88208}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Expenses.Test", "Expenses.Test\Expenses.Test.csproj", "{D5D8F188-2E15-4BF7-B97C-D122EB8BF979}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Expenses.UnitTests", "Expenses.UnitTests\Expenses.UnitTests.csproj", "{D5D8F188-2E15-4BF7-B97C-D122EB8BF979}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

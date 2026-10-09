@@ -2,7 +2,7 @@
 
 API em ASP.NET Core (.NET 10). A solution `Expenses.sln` contém os projetos
 `Expenses.Api`, `Expenses.Application`, `Expenses.Domain`, `Expenses.Infrastructure`
-e `Expenses.Test`.
+e `Expenses.UnitTests` (somente testes unitários). Integrações ficam no projeto irmão `expenses-tests`.
 
 O `GET /health` informa se a API responde. O `GET /health/db` verifica se a aplicação
 consegue acessar o PostgreSQL. O `GET /v1/identity/users` consulta
@@ -11,10 +11,97 @@ Esta listagem é um diagnóstico local: fica disponível apenas em `Development`
 Em `Production`, `Staging` e demais ambientes, a rota não é registrada e retorna
 `404`. A publicação desse recurso depende de uma política de autorização futura.
 
+## Integração Cognito — fundação de Identity
+
+O backend possui um adaptador Cognito registrado na injeção de dependência, com
+SDK AWS v4 isolado em Infrastructure e contrato em Application. Ele suporta
+criação administrativa sem envio de mensagens, definição de senha permanente,
+consulta do principal, login administrativo, rotação de refresh token, revogação
+e exclusão compensatória. Cada chamada tem limite de três segundos, propaga
+cancelamento e não executa retries automáticos. Exceções externas são convertidas
+em erros categorizados sem reter payloads ou mensagens do fornecedor.
+
+O `POST /v1/identity/users` agora cria a conta e o perfil com idempotência,
+reserva concorrente, auditoria e recuperação de falhas parciais. Login HTTP, bloqueio por e-mail, cookies/CSRF e revogação local imediata também estão implementados; veja a seção de sessões abaixo.
+Timeout de escrita pode ter resultado desconhecido; a API nunca exclui uma conta
+por e-mail sem comprovar que pertence à operação.
+
+## Cadastro pela API
+
+Enviar JSON com `email` e `password` e, preferencialmente, `Idempotency-Key`
+(UUID aleatório). O e-mail é normalizado para minúsculas e espaços externos são
+removidos; limite final de 128 caracteres ASCII. Senha de 8 a 256 caracteres,
+com letra e algarismo ASCII, sem espaços/controles, sem normalização. Corpo até
+8 KB; campos desconhecidos são rejeitados.
+
+`201` retorna `{ "user": { "id": "<uuid>", "email": "usuario@exemplo.com", "createdAt": "<UTC>" } }`.
+Não retorna tokens, cookies ou Location. Mesma chave/e-mail repete o resultado
+por 24 horas da reserva sem mudar a senha. Chave em execução, expirada, reutilizada
+para outro e-mail ou novo cadastro com e-mail existente resulta em `409`.
+
+Erros usam ProblemDetails com `code`, `traceId` W3C e `correlationId` UUID.
+`400`: entrada inválida; `422`: política de senha; `413`: tamanho; `415`: formato;
+`403`: origem não permitida; `503`: indisponibilidade/reconciliação; `500`: falha
+inesperada sanitizada. Sucesso/erro usam `Cache-Control: no-store`.
+
+Aplicar `sprint-2-001` antes de usar o cadastro. O caso de uso possui orçamento
+cooperativo de cinco segundos após leitura HTTP; chamadas Cognito continuam
+limitadas a três segundos sem retry. Consulte [contrato e evidências E2](../expenses-docs/fdd/FDD-Criacao-Usuario-Autenticacao/2-desenvolvimento.md#cadastro-e2)
+e [implantação e reconciliação](../expenses-docs/fdd/FDD-Criacao-Usuario-Autenticacao/4-operacao.md).
+
+Configuração usada ao resolver o adaptador:
+
+| Chave | Uso |
+| --- | --- |
+| `Cognito:Region` | Região do User Pool. |
+| `Cognito:UserPoolId` | Pool de identidade. |
+| `Cognito:ClientId` | App Client confidencial. |
+| `Cognito:ClientSecret` | Segredo privado, nunca no appsettings versionado. |
+| `AWS:Profile` | Perfil local opcional; sem ele, usa a cadeia padrão do SDK, incluindo roles AWS. |
+
+O perfil `expenses-dev` está configurado apenas em Development. O pacote
+`AWSSDK.Signin` permite usar o login de console feito com
+`aws login --profile expenses-dev`. O segredo local pode ser informado sem
+eco/histórico com `python3 ../expenses-infrastructure/scripts/configure-cognito-secret.py`. User Secrets
+ficam fora do repositório, mas não são um cofre criptografado; destinam-se ao
+desenvolvimento local. Containers não recebem automaticamente esses segredos
+nem o perfil do host. Não copiar credenciais para a imagem.
+
+A configuração é validada quando o adaptador é resolvido, sem fazer acesso AWS
+na inicialização ou no health check. Assim os diagnósticos existentes continuam
+independentes da configuração Cognito. Os histogramas e counters do adaptador
+usam o Meter `Expenses.Identity.Cognito`, com duração em segundos e tags de
+operação/resultado; spans usam ActivitySource do mesmo nome. Exportação para
+OpenTelemetry/CloudWatch ainda não foi configurada.
+
+### Validação real e isolada de Cognito
+
+A suíte comum não acessa a AWS. Para executar explicitamente o teste remoto,
+com User Secrets configurado e perfil autenticado, a partir de `expenses-service`:
+
+```bash
+EXPENSES_RUN_COGNITO_TESTS=1 \
+EXPENSES_COGNITO_TEST_POOL_ID=us-east-1_DyDv5WCxr \
+python3 ../expenses-tests/scripts/external.py
+```
+
+Faça build antes se o código mudou. O teste exige que o pool configurado coincida
+com o destino explícito. Ele cria somente um usuário aleatório
+`expenses-check-<uuid>@example.invalid`, sem enviar mensagem, e verifica criação,
+senha permanente, login imediato, duração do access token, rotação e rejeição do
+refresh após revogação. A limpeza consulta a identidade antes de excluir e
+confirma sua remoção. Em falha de limpeza, o erro informa somente o identificador
+sintético para recuperação manual. Senhas e tokens não são impressos.
+
+Em 2026-10-07, essa validação passou no pool de desenvolvimento e a limpeza foi
+confirmada. O teste não grava perfis no PostgreSQL, não testa os futuros endpoints
+HTTP nem comprova revogação imediata na API. Durações individuais são apenas
+amostras; não comprovam a meta p95 < 150 ms.
+
 ## Requisitos
 
 - SDK .NET 10 instalado. Verifique com `dotnet --version`.
-- PostgreSQL local do Docker Desktop, com a sprint-1 do Liquibase aplicada.
+- PostgreSQL local do Docker Desktop, com o master Liquibase aplicado (sprints 1, 2 e 3).
 - Para o teste isolado completo: Python 3, Docker CLI, Liquibase e Java.
 
 ## Conexão local
@@ -81,7 +168,7 @@ Com a API em execução no ambiente `Development`:
 - Documento OpenAPI JSON: <http://localhost:5183/swagger/v1/swagger.json>
 - No perfil HTTPS, a interface fica em <https://localhost:7285/swagger>.
 
-A documentação inclui `GET /health`, `GET /health/db` e `GET /v1/identity/users`, os parâmetros
+A documentação inclui `POST /v1/identity/users`, `GET /health`, `GET /health/db` e `GET /v1/identity/users`, os parâmetros
 `page`/`pageSize`, seus limites e valores padrão, os modelos de resposta e os
 códigos HTTP. Use **Try it out** e **Execute** para chamar os endpoints. O JSON
 também pode ser importado no Postman.
@@ -176,29 +263,20 @@ dotnet build Expenses.sln
 dotnet test Expenses.sln --no-build
 ```
 
-Essa suíte verifica paginação, mapeamento, respostas HTTP, parâmetros inválidos,
-erros sanitizados, cancelamento/timeout, restrição por ambiente e independência do
-health check. Também cobre o `/health/db` com falha de conexão, configuração inválida
-e servidor sem resposta, verificando o limite de cinco segundos. Os testes HTTP usam
-`WebApplicationFactory`. O cenário com banco real
-fica explicitamente marcado como ignorado quando a conexão de teste não foi fornecida.
+Essa solução agora executa **46 testes unitários**, sem HTTP, banco ou AWS reais.
+Os 49 testes de integração e os três testes Cognito foram movidos para o projeto
+irmão [expenses-tests](../expenses-tests/README.md).
 
-Para executar **todos** os testes, incluindo PostgreSQL real:
+Para as integrações locais, o comando de compatibilidade permanece:
 
 ```bash
-python3 scripts/test-postgres.py
+python3 ../expenses-infrastructure/scripts/test-postgres.py
 ```
 
-O script usa o container `expenses-postgres` no contexto `desktop-linux`, obtém as
-credenciais de `expenses-infrastructure/.env` ou de `POSTGRES_USER`/`POSTGRES_PASSWORD`, cria um banco
-aleatório `expenses_users_check_*`, aplica o Liquibase e executa a suíte. O teste
-verifica o `/health/db` com sucesso, insere três usuários sintéticos nesse banco e verifica ordenação, páginas, colunas
-geradas, datas UTC e ausência de tracking. O banco temporário é removido ao final;
-nenhum usuário de teste é inserido em `expenses`. Se algum teste falhar, o comando
-retorna erro após tentar a limpeza.
-
-`EXPENSES_TEST_CONNECTION_STRING` é preenchida pelo script. O teste recusa bancos
-cujo nome não comece com `expenses_users_check_`.
+Ele cria um container PostgreSQL próprio com credenciais aleatórias, aplica Liquibase,
+exige 49 aprovações sem ignorados e remove somente os recursos daquela execução.
+Não lê o `.env` do desenvolvimento, não usa `expenses-postgres` e não executa Cognito.
+Os runners de HTTPS, navegador, carga e segurança estão documentados em `expenses-tests`.
 
 ## Encerrar a aplicação
 
@@ -207,3 +285,59 @@ Aguarde a mensagem `Application is shutting down...` e o retorno do prompt.
 
 Após o encerramento, `http://localhost:5183/health` deixa de responder.
 Para iniciar novamente, execute o mesmo comando `dotnet run` acima.
+
+## Cadastro com PostgreSQL e Cognito reais
+
+A partir de `expenses-service`, com Docker/PostgreSQL disponível, SDK compilável,
+perfil AWS autenticado e User Secrets configurado:
+
+```bash
+EXPENSES_RUN_COGNITO_TESTS=1 \
+EXPENSES_COGNITO_TEST_POOL_ID=us-east-1_DyDv5WCxr \
+EXPENSES_COGNITO_REGISTRATION_SAMPLES=20 \
+python3 ../expenses-tests/scripts/external.py
+```
+
+Esse comando cria banco descartável, aplica o master e executa a suíte incluindo
+cadastro HTTP, login direto no Cognito para verificar a credencial criada, replay
+e limpeza confirmada. O número de amostras admite 1 a 30; o padrão é 1. O teste
+recusa outro pool que não corresponda à configuração. O cenário de cadastro verifica a credencial diretamente; o cenário CognitoSessions adicional cobre também login HTTP. `EXPENSES_REGISTRATION_REPORT_PATH` opcional grava somente
+tempos e metadados não secretos em JSON.
+
+Em 2026-10-07 a suíte integrada passou com 78 testes. Vinte amostras sequenciais
+resultaram em p95 **1202,96 ms**, acima da meta de 150 ms. É evidência local com
+TestServer, PostgreSQL local e Cognito real; não comprova latência de produção.
+[Relatório](../expenses-docs/fdd/FDD-Criacao-Usuario-Autenticacao/3-testes-latencia-cadastro.json).
+
+## Login, sessões e logout
+
+A entrega [E3/E4](../expenses-docs/fdd/FDD-Criacao-Usuario-Autenticacao/2-desenvolvimento.md#login-e-sessoes-e3-e4) documenta contratos,
+concorrência, recuperação e implantação. O frontend ainda não possui essas telas.
+Aplicar `sprint-3-001` e executar `python3 ../expenses-infrastructure/scripts/configure-session-secret.py`
+para configurar a chave privada HMAC de e-mail; no ambiente atual ela já foi salva.
+
+Em HTTPS, obter `GET /v1/identity/csrf` e enviar o token retornado no header
+`X-CSRF-Token`, preservando cookies, para:
+
+- `POST /v1/identity/sessions`: JSON email/password; cria sessão.
+- `GET /v1/identity/session/current`: consulta ou renova sessão.
+- `DELETE /v1/identity/sessions/current`: revoga sessão imediatamente; `204` sem corpo.
+
+Dez credenciais inválidas em 15 minutos bloqueiam somente o e-mail por 15 minutos.
+As últimas três tentativas retornam aviso. Sessões usam cookies Secure/HttpOnly/
+SameSite=Strict e estado no PostgreSQL; logout prevalece sobre refresh concorrente.
+Falha de renovação limpa cookies e encerra autorização. Falha de persistência do
+logout retorna `503`, sem afirmar que a revogação foi confirmada.
+
+`[Authorize]` aplica a política de sessão para novos endpoints; não aceita bearer
+JWT isolado nem consulta cache positivo. Escritas também exigem proteção CSRF e
+autorização por recurso. A listagem global de usuários permanece diagnóstico local.
+
+A suíte remota já descrita inclui `Category=CognitoSessions`. Para salvar tempos
+não secretos, usar `EXPENSES_SESSION_REPORT_PATH` opcional. O teste cria/remove uma
+conta sintética e usa banco descartável; não atualiza `expenses`. A medição funcional
+local não comprova p95 < 150 ms. Para múltiplas réplicas, provisionar key ring Data
+Protection durável, compartilhado e protegido, além da mesma chave HMAC; não usar
+chaves efêmeras ou copiar credenciais para imagens.
+
+Validação histórica E3/E4, antes da separação das suítes: **98 testes aprovados, zero ignorados**, incluindo PostgreSQL e Cognito reais; validação de upgrade/rollback Liquibase aprovada. As migrações ainda precisam ser aplicadas ao banco local `expenses` para uso da API fora dos testes.
